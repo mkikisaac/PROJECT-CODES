@@ -1,0 +1,136 @@
+// Load your aquifer and borehole FeatureCollections
+var aquiferData = ee.FeatureCollection('projects/ee-isaacwriter200/assets/wajir_gw_potential2');
+var boreholeData = ee.FeatureCollection('projects/ee-isaacwriter200/assets/compiled_borehole_data');
+
+// Define visualization parameters for aquifers and boreholes
+var aquiferVis = { color: 'blue', fillColor: '0000FF11' };
+var boreholeVis = { color: 'blue', fillColor: 'FF000011' };
+
+// Create the main map.
+var mainMap = ui.Map();
+
+// Create a panel to hold the time series chart and instructions
+var chartPanel = ui.Panel({
+    style: { width: '400px', padding: '8px' }
+});
+
+// Add instructions text to the chart panel
+var instructions = ui.Label({
+    value: 'Click on any aquifer to get the Grounwater level trend',
+    style: { fontSize: '14px', fontWeight: 'bold', margin: '4px 0' }
+});
+
+chartPanel.add(instructions);
+
+// Add the aquifer and borehole data to the main map with visualization parameters
+mainMap.addLayer(aquiferData, aquiferVis, 'Aquifers');
+mainMap.addLayer(boreholeData, boreholeVis, 'Boreholes');
+
+// Function to create a time series chart of average borehole depths
+function createTimeSeriesChart(boreholesInAquifer) {
+    // Group borehole data by YearDrill and calculate average depth
+    var groupedData = boreholesInAquifer.reduceColumns({
+        reducer: ee.Reducer.mean().group({
+            groupField: 1,
+            groupName: 'Year Drill',
+        }),
+        selectors: ['Depth (m)', 'Year Drill'] // Make sure these property names match your FeatureCollection
+    });
+
+    // Extract the results and create time series data
+    var results = ee.List(groupedData.get('groups'));
+    var timeSeriesData = ee.FeatureCollection(results.map(function (item) {
+        item = ee.Dictionary(item);
+        var year = ee.Number(item.get('Year Drill'));
+        var meanDepth = ee.Number(item.get('mean'));
+        return ee.Feature(null, { 'year': year, 'meanDepth': meanDepth });
+    }));
+
+    // Create and display the chart in the chart panel
+    var chart = ui.Chart.feature.byFeature(timeSeriesData, 'year', 'meanDepth')
+        .setOptions({
+            title: 'Average grounwater level Time Series',
+            vAxis: {
+                title: 'Average Depth (m)',
+                viewWindow: {
+                    min: 0,
+                    max: 300
+                },
+                gridlines: {
+                    count: 5 // This will create gridlines at 0, 50, 100, 150, 200
+                }
+            },
+            hAxis: {
+                title: 'Year',
+                viewWindow: {
+                    min: 1940,
+                    max: 2030
+                },
+                gridlines: {
+                    count: 5 // This will create gridlines at 0, 50, 100, 150, 200
+                }
+
+            },
+            lineWidth: 1,
+            pointSize: 3,
+            trendlines: {
+                0: {
+                    type: 'linear',
+                    color: 'red',
+                    lineWidth: 1,
+                    opacity: 0.7,
+                    showR2: true,
+                    visibleInLegend: true
+                }
+            }
+        });
+
+    chartPanel.clear();
+    chartPanel.add(chart);
+}
+
+// Add a click event listener to the map
+mainMap.onClick(function (coords) {
+    // Create a point from the clicked coordinates
+    var point = ee.Geometry.Point([coords.lon, coords.lat]);
+
+    // Find the aquifer that contains the clicked point
+    var clickedAquifer = aquiferData.filterBounds(point).first();
+
+    // Process the clicked aquifer
+    clickedAquifer.evaluate(function (aquifer) {
+        if (aquifer) {
+            // Clip the boreholes to the clicked aquifer
+            var boreholesInAquifer = clipBoreholesToAquifer(clickedAquifer);
+
+            // Create and display the time series chart
+            createTimeSeriesChart(boreholesInAquifer);
+
+            // Highlight the clicked aquifer in red
+            var clickedAquiferVis = { color: 'red', fillColor: 'FF000011' };
+            var aquiferLayer = ui.Map.Layer(clickedAquifer.geometry(), clickedAquiferVis, 'Clicked Aquifer');
+            mainMap.layers().set(2, aquiferLayer);
+        } else {
+            console.log('No aquifer found at this location.');
+        }
+    });
+});
+
+// Function to clip boreholes to the clicked aquifer
+function clipBoreholesToAquifer(clickedAquifer) {
+    return boreholeData.filterBounds(clickedAquifer.geometry());
+}
+
+// Set up the UI with a SplitPanel
+var splitPanel = ui.SplitPanel({
+    firstPanel: mainMap,
+    secondPanel: chartPanel,
+    orientation: 'horizontal'
+});
+
+// Set the split panel as the root UI element
+ui.root.clear();
+ui.root.add(splitPanel);
+
+// Center the map on the aquifer data
+mainMap.centerObject(aquiferData, 8);
